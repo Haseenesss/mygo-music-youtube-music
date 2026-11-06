@@ -7,10 +7,10 @@ Plays YouTube Music in [MyGo Music](https://github.com/egoist/mygo-music). It is
 Install [ffmpeg](https://ffmpeg.org), and [yt-dlp](https://github.com/yt-dlp/yt-dlp) as a fallback. On macOS:
 
 ```bash
-brew install ffmpeg yt-dlp deno
+brew install ffmpeg yt-dlp
 ```
 
-yt-dlp uses Deno, Node or Bun. Keep yt-dlp up to date, as YouTube changes often.
+yt-dlp needs a JavaScript runtime (Deno, Node or Bun) to solve YouTube's challenges; Homebrew includes Deno. Keep yt-dlp up to date, as YouTube changes often.
 
 Then install the plugin either way:
 
