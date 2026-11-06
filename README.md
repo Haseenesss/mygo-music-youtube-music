@@ -14,15 +14,11 @@ yt-dlp needs a JavaScript runtime (Deno, Node or Bun) to solve YouTube's challen
 
 Install with the deeplink:
 
-```text
-mygo-music://install-plugin?repo=egoist/mygo-music-youtube-music
-```
+[mygo-music://install-plugin?repo=egoist/mygo-music-youtube-music](mygo-music://install-plugin?repo=egoist/mygo-music-youtube-music)
 
 Or paste the GitHub URL in Settings > Plugins:
 
-```text
-https://github.com/egoist/mygo-music-youtube-music
-```
+[https://github.com/egoist/mygo-music-youtube-music](https://github.com/egoist/mygo-music-youtube-music)
 
 In Settings > Plugins, allow YouTube Music to start programs. To get your library, click **Sign In** and sign in to Google in the window that opens.
 
