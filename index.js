@@ -10,6 +10,9 @@ const site = "https://music.youtube.com";
 const webUA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
+// What the plugin says is in the listener's language, from locales/zh-CN.json.
+const t = host.t;
+
 function fail(code, message) {
   const e = new Error(message);
   e.code = code;
@@ -80,7 +83,8 @@ function clientVersion() {
 // The apps the service tells apart, as a request says it's from one of them.
 const remix = {
   get client() {
-    return { clientName: "WEB_REMIX", clientVersion: clientVersion() };
+    // YouTube's own titles, such as its shelves', come in the listener's language.
+    return { clientName: "WEB_REMIX", clientVersion: clientVersion(), hl: host.language() === "zh-CN" ? "zh-CN" : "en" };
   },
 };
 
@@ -133,7 +137,7 @@ async function call(endpoint, body, as = remix) {
   });
   if (res.status === 401) {
     endSession();
-    throw fail("signIn", "Your YouTube Music session has ended: sign in again");
+    throw fail("signIn", t("Your YouTube Music session has ended: sign in again"));
   }
   if (!res.ok) throw new Error(`${endpoint}: ${res.status}`);
   return res.json();
@@ -387,7 +391,7 @@ export async function signIn() {
   const me = await account();
   if (!me) {
     endSession();
-    throw new Error("YouTube Music didn't take that sign-in: try again");
+    throw new Error(t("YouTube Music didn't take that sign-in: try again"));
   }
   return me;
 }
@@ -414,14 +418,14 @@ export async function home() {
     sections.push(...(await sectionsOf(more)));
     token = nextToken(findOne(more, "sectionListContinuation"));
   }
-  return { title: "Home", sections };
+  return { title: t("Home"), sections };
 }
 
 export async function browse({ page }) {
   const ids = { charts: ["FEmusic_charts", "Charts"], new: ["FEmusic_new_releases", "New Releases"] };
   const known = ids[page];
-  if (known) return { title: known[1], sections: await sectionsOf(await browseId(known[0])) };
-  throw fail("unavailable", "no such page");
+  if (known) return { title: t(known[1]), sections: await sectionsOf(await browseId(known[0])) };
+  throw fail("unavailable", t("no such page"));
 }
 
 // Search. Each kind has its filter, which the website sends in this form.
@@ -606,7 +610,7 @@ export async function played({ id }) {
 async function report(id) {
   const r = await call("player", { videoId: id, playbackContext: { contentPlaybackContext: {} } });
   const base = r.playbackTracking?.videostatsPlaybackUrl?.baseUrl;
-  if (!base) throw new Error("YouTube gave no address to report it to");
+  if (!base) throw new Error(t("YouTube gave no address to report it to"));
   const url = new URL(base);
   // The session goes with it, so it goes to YouTube alone.
   if (url.protocol !== "https:" || !/(^|\.)youtube\.com$/.test(url.hostname)) {
@@ -780,7 +784,7 @@ async function program(name, versionFlag) {
       }
     } catch (e) {
       if (/allowed/.test(e.message)) {
-        throw fail("setup", "Allow YouTube Music to start programs in its settings");
+        throw fail("setup", t("Allow YouTube Music to start programs in its settings"));
       }
     }
   }
@@ -818,7 +822,7 @@ async function visitorData() {
   if (visitor) return visitor;
   const r = await call("visitor_id", {}, { ...remix, anonymous: true });
   visitor = r.responseContext?.visitorData || "";
-  if (!visitor) throw new Error("YouTube gave this visit no ID");
+  if (!visitor) throw new Error(t("YouTube gave this visit no ID"));
   return visitor;
 }
 
@@ -838,7 +842,7 @@ async function direct(id) {
     if (f.audioTrack && !f.audioTrack.audioIsDefault) continue;
     if (!best || f.bitrate > best.bitrate) best = f;
   }
-  if (!best) throw new Error("YouTube listed no audio to play as it is");
+  if (!best) throw new Error(t("YouTube listed no audio to play as it is"));
   return { url: best.url, http_headers: { "User-Agent": webUA }, gain: gainOf(r.playerConfig?.audioConfig), direct: true };
 }
 
@@ -911,7 +915,7 @@ function ytdlpFailure(output) {
   const said = output.split("\n").reverse().find((l) => l.startsWith("ERROR:")) || output.trim() || "yt-dlp stopped";
   const why = said.replace(/^ERROR:\s*(\[[^\]]*\]\s*)?(\S+:\s*)?/, "");
   if (/not a bot|sign in|cookies/i.test(why)) {
-    return fail("signIn", cookie() ? "YouTube turned down your session: sign in again" : "YouTube asks you to sign in to play this");
+    return fail("signIn", cookie() ? t("YouTube turned down your session: sign in again") : t("YouTube asks you to sign in to play this"));
   }
   if (/unavailable|private|removed|not available|premium/i.test(why)) return fail("unavailable", why);
   return new Error(why);
@@ -945,7 +949,7 @@ function stopWaiting() {
 async function serve(source, bitRate) {
   const ffmpeg = await program("ffmpeg", "-version");
   if (!ffmpeg) {
-    throw fail("setup", "YouTube Music plays through ffmpeg: install it with Homebrew, or so that it's on the PATH");
+    throw fail("setup", t("YouTube Music plays through ffmpeg: install it with Homebrew, or so that it's on the PATH"));
   }
   const pieces = await asksInPieces(ffmpeg);
   stopWaiting();
@@ -978,7 +982,7 @@ async function serve(source, bitRate) {
     if (stopped) throw new Error(`ffmpeg stopped: ${proc.errorOutput().trim().split("\n").pop()}`);
     if (Date.now() > until) {
       proc.kill();
-      throw new Error("the audio didn't start in time");
+      throw new Error(t("the audio didn't start in time"));
     }
     await sleep(30);
   }
