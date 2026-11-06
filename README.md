@@ -12,10 +12,7 @@ brew install ffmpeg yt-dlp
 
 yt-dlp needs a JavaScript runtime (Deno, Node or Bun) to solve YouTube's challenges; Homebrew includes Deno. Keep yt-dlp up to date, as YouTube changes often.
 
-Then install the plugin either way:
-
-- [Install in MyGo Music](mygo-music://install-plugin?repo=egoist/mygo-music-youtube-music), which opens Settings > Plugins and asks before installing it; or
-- in Settings > Plugins, click **+**, choose **Install from GitHub**, and enter `https://github.com/egoist/mygo-music-youtube-music`.
+Install with the [deeplink](mygo-music://install-plugin?repo=egoist/mygo-music-youtube-music), or paste `https://github.com/egoist/mygo-music-youtube-music` in Settings > Plugins.
 
 In Settings > Plugins, allow YouTube Music to start programs. To get your library, click **Sign In** and sign in to Google in the window that opens.
 
