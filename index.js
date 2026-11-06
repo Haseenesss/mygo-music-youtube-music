@@ -402,13 +402,6 @@ function endSession() {
   likedSet = null;
 }
 
-export function setSetting({ key }) {
-  if (key === "programs") {
-    for (const name of Object.keys(installed)) delete installed[name];
-    ranged = null;
-  }
-}
-
 // Pages.
 
 export async function home() {
@@ -769,18 +762,13 @@ async function youtubeLyrics(next) {
 
 const installed = {};
 
-// GUI apps don't get a shell's PATH, so where programs are commonly installed is
-// tried too. Starting one is the only way a plugin can tell it's there.
+// GUI apps don't get a shell's PATH, so where Homebrew installs programs is
+// tried too. Those are the places the process permission in plugin.json names,
+// so a new one goes there as well. Starting one is the only way a plugin can
+// tell it's there.
 async function program(name, versionFlag) {
   if (installed[name]) return installed[name];
-  const folder = host.setting("programs");
-  const sep = host.platform === "windows" ? "\\" : "/";
-  const places = [
-    ...(folder ? [`${folder.replace(/[\\/]+$/, "")}${sep}${name}`] : []),
-    name,
-    `/opt/homebrew/bin/${name}`,
-    `/usr/local/bin/${name}`,
-  ];
+  const places = [name, `/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`];
   for (const path of places) {
     try {
       const proc = host.spawn(path, [versionFlag]);
@@ -957,7 +945,7 @@ function stopWaiting() {
 async function serve(source, bitRate) {
   const ffmpeg = await program("ffmpeg", "-version");
   if (!ffmpeg) {
-    throw fail("setup", "YouTube Music plays through ffmpeg: install it, or say where it is in the plugin's settings");
+    throw fail("setup", "YouTube Music plays through ffmpeg: install it with Homebrew, or so that it's on the PATH");
   }
   const pieces = await asksInPieces(ffmpeg);
   stopWaiting();
