@@ -804,8 +804,10 @@ async function locate(id) {
   try {
     found = await direct(id);
   } catch (e) {
-    // What YouTube won't play, yt-dlp can't either.
-    if (e.code === "unavailable") throw e;
+    // What YouTube won't play, yt-dlp can't either, but for what it keeps for
+    // Premium: the Vision Pro's app asks as a visitor, and yt-dlp, with the
+    // session, as its member.
+    if (e.code === "unavailable" && !(cookie() && /premium/i.test(e.message))) throw e;
     console.warn(`finding ${id}'s audio: ${e.message}`);
     visitor = "";
     found = await throughYtdlp(id, e);
