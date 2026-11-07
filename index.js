@@ -185,7 +185,7 @@ function creditsOf(runs) {
   const out = { artists: [], album: null, duration: 0, names: [] };
   for (const run of runs || []) {
     const text = run.text;
-    if (!text || /^\s*[•·,&]\s*$/.test(text)) continue;
+    if (!text || /^\s*[•·,&、，]\s*$/.test(text)) continue;
     const nav = run.navigationEndpoint;
     const type = pageTypeOf(nav);
     if (type === "MUSIC_PAGE_TYPE_ARTIST" || type === "MUSIC_PAGE_TYPE_USER_CHANNEL") {
@@ -263,8 +263,14 @@ function collectionOf(nav, name, runs, image) {
     case "MUSIC_PAGE_TYPE_ALBUM":
     case "MUSIC_PAGE_TYPE_AUDIOBOOK":
       return { kind: "album", value: { id, name, imageUrl: image, artists: credits.artists, released: credits.names.find((n) => /^\d{4}$/.test(n)) } };
-    case "MUSIC_PAGE_TYPE_PLAYLIST":
-      return { kind: "playlist", value: { id: plainPlaylistId(id), name, imageUrl: image, owner: credits.artists[0]?.name || credits.names[1] || "" } };
+    case "MUSIC_PAGE_TYPE_PLAYLIST": {
+      // Who made it comes after what it is, "Playlist • its maker". A mix's
+      // card, and the home page's playlists', say instead whom it's of, a list
+      // of them with commas, which names no maker.
+      const listed = runs.some((r) => /^\s*[,、，]\s*$/.test(r.text));
+      const owner = listed ? "" : credits.artists[0]?.name || credits.names[1] || "";
+      return { kind: "playlist", value: { id: plainPlaylistId(id), name, imageUrl: image, owner } };
+    }
   }
   return null;
 }
