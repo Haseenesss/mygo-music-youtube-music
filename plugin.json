@@ -9,6 +9,7 @@
     "network": [
       "music.youtube.com",
       "s.youtube.com",
+      "manifest.googlevideo.com",
       "api.betterlyrics.org"
     ],
     "process": [

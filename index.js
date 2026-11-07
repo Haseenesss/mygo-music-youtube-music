@@ -836,6 +836,13 @@ async function direct(id) {
     const why = status.reason || `YouTube says ${status.status || "nothing"} of this`;
     throw status.status === "UNPLAYABLE" || status.status === "ERROR" ? fail("unavailable", why) : new Error(why);
   }
+  // A live stream, as the stations of the home page's "Listen together" are,
+  // gives its audio in pieces at addresses that each need the piece's number,
+  // which ffmpeg can't read as one file. Its HLS playlist it reads as it goes.
+  const hls = r.streamingData?.hlsManifestUrl;
+  if (r.videoDetails?.isLive && hls) {
+    return { url: await liveAudio(hls), http_headers: { "User-Agent": webUA }, direct: true };
+  }
   let best = null;
   for (const f of r.streamingData?.adaptiveFormats || []) {
     if (!f.mimeType?.startsWith("audio/") || !f.url || f.isDrc) continue;
@@ -844,6 +851,21 @@ async function direct(id) {
   }
   if (!best) throw new Error(t("YouTube listed no audio to play as it is"));
   return { url: best.url, http_headers: { "User-Agent": webUA }, gain: gainOf(r.playerConfig?.audioConfig), direct: true };
+}
+
+// A live stream's playlist of its audio alone, in AAC rather than the HE-AAC
+// of its smallest videos. Given the playlist of all of them, ffmpeg tries each
+// video before it starts, which takes it seconds.
+async function liveAudio(manifest) {
+  const res = await fetch(manifest, { headers: { "user-agent": webUA } });
+  if (!res.ok) throw new Error(`hls: ${res.status}`);
+  const lines = (await res.text()).split("\n").map((l) => l.trim());
+  const attr = (line, name) => line.match(new RegExp(`${name}="([^"]*)"`))?.[1] || "";
+  const audio = {};
+  lines.filter((l) => l.startsWith("#EXT-X-MEDIA:") && /TYPE=AUDIO/.test(l)).forEach((l) => (audio[attr(l, "GROUP-ID")] = attr(l, "URI")));
+  const groups = Object.keys(audio).filter((g) => audio[g]);
+  const plain = lines.find((l) => l.startsWith("#EXT-X-STREAM-INF:") && /mp4a\.40\.2/.test(attr(l, "CODECS")) && audio[attr(l, "AUDIO")]);
+  return (plain && audio[attr(plain, "AUDIO")]) || audio[groups[groups.length - 1]] || manifest;
 }
 
 // The app's gain is ReplayGain's, which brings a track to -18 LUFS, and YouTube
@@ -986,6 +1008,16 @@ async function serve(source, bitRate) {
     }
     await sleep(30);
   }
+  // Once the request for it has come, it no longer waits, and has as long as
+  // it's listened to: a live stream goes on for hours. It writes out what it
+  // serves right as it starts serving it.
+  (async () => {
+    while (!stopped && !proc.errorOutput().includes("Output #0")) await sleep(500);
+    if (stopped) return;
+    clearTimeout(timer);
+    const at = serving.indexOf(proc);
+    if (at >= 0) serving.splice(at, 1);
+  })();
   await sleep(100);
   return `http://127.0.0.1:${port}/`;
 }
