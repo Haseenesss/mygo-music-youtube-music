@@ -262,11 +262,24 @@ function collectionOf(nav, name, runs, image) {
       return { kind: "artist", value: { id, name, imageUrl: image } };
     case "MUSIC_PAGE_TYPE_ALBUM":
     case "MUSIC_PAGE_TYPE_AUDIOBOOK":
-      return { kind: "album", value: { id, name, imageUrl: image, artists: credits.artists, released: credits.names.find((n) => /^\d{4}$/.test(n)) } };
+      return { kind: "album", value: { id, name, imageUrl: image, artists: credits.artists, released: yearOf(credits.names), kind: albumKindOf(credits.names[0]) } };
     case "MUSIC_PAGE_TYPE_PLAYLIST":
       return { kind: "playlist", value: { id: plainPlaylistId(id), name, imageUrl: image, owner: credits.artists[0]?.name || credits.names[1] || "" } };
   }
   return null;
+}
+
+// The year in a subtitle's words, as "2024", or "2024年" in Chinese.
+function yearOf(names) {
+  return names.map((n) => /^(\d{4})年?$/.exec(n)?.[1]).find(Boolean);
+}
+
+// What kind of album a subtitle's first word says it is, if it says.
+function albumKindOf(word) {
+  if (/^(EP|迷你专辑)$/i.test(word || "")) return "ep";
+  if (/^(Single|单曲)$/i.test(word || "")) return "single";
+  if (/^(Album|专辑)$/i.test(word || "")) return "album";
+  return undefined;
 }
 
 function itemsOf(list) {
@@ -314,6 +327,8 @@ async function sectionsOf(answer) {
       if (!items.length) continue;
       sections.push({
         title: shelfTitle(shelf),
+        // Its "See all", a page of everything it's the start of.
+        more: findOne(shelf.title || shelf.header, "browseEndpoint")?.browseId || shelf.bottomEndpoint?.browseEndpoint?.browseId || "",
         tracks: await withDurations(ofKind(items, "track")),
         albums: ofKind(items, "album"),
         artists: ofKind(items, "artist"),
@@ -483,14 +498,35 @@ async function albumPage({ id }) {
   return { album, tracks: await withDurations(tracks) };
 }
 
+// The shelf of an artist's singles and EPs, by its title in either language.
+const singlesShelf = /single|\bEPs?\b|单曲|迷你专辑/i;
+
 async function artistPage({ id }) {
   const answer = await browseId(id);
   const header = findOne(answer, "musicImmersiveHeaderRenderer") || findOne(answer, "musicVisualHeaderRenderer") || {};
   const sections = await sectionsOf(answer);
+  // Their top songs come first, five of them, with a page of the rest; the
+  // shelves of videos and live performances after them aren't songs.
+  const top = sections.find((s) => s.tracks.length);
+  let tracks = top?.tracks || [];
+  if (top?.more) {
+    try {
+      const all = ofKind(rowsOf(await browseId(top.more)).items, "track");
+      if (all.length) tracks = await withDurations(all);
+    } catch {
+      // The five on their page do.
+    }
+  }
+  // Their albums, and on a shelf of their own, their singles and EPs, which
+  // say so but on the artist's page only by the shelf they're on.
+  const albums = sections.flatMap((s) => {
+    const kind = singlesShelf.test(s.title) ? "single" : "album";
+    return s.albums.map((a) => ({ ...a, kind: a.kind || kind }));
+  });
   return {
     artist: { id, name: textOf(header.title), imageUrl: imageOf(header.thumbnail || header.foregroundThumbnail) },
-    tracks: sections.flatMap((s) => s.tracks).slice(0, 20),
-    albums: sections.flatMap((s) => s.albums),
+    tracks,
+    albums,
   };
 }
 
