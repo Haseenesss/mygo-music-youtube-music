@@ -501,11 +501,11 @@ export { albumPage as album, artistPage as artist };
 // A long playlist comes in pages: this many is thousands of songs.
 const pagesAtMost = 30;
 
-async function tracksOfAll(answer) {
+async function tracksOfAll(answer, pages = pagesAtMost) {
   const out = [];
   let { items, token } = rowsOf(answer);
   out.push(...ofKind(items, "track"));
-  for (let i = 0; token && i < pagesAtMost; i++) {
+  for (let i = 0; token && i < pages; i++) {
     ({ items, token } = rowsOf(await call("browse", { continuation: token })));
     out.push(...ofKind(items, "track"));
   }
@@ -515,7 +515,10 @@ async function tracksOfAll(answer) {
 async function playlistPage({ id }) {
   const answer = await browseId(`VL${id}`);
   const header = headerOf(answer);
-  const tracks = await withDurations(await tracksOfAll(answer));
+  // A mix, as the home page's Supermix is, goes on for as long as it's asked,
+  // more of it the same songs again: its 30 pages took as long as the app
+  // waits. Its first hundred are what the website shows before it's scrolled.
+  const tracks = await withDurations(await tracksOfAll(answer, id.startsWith("RD") ? 0 : pagesAtMost));
   return {
     id,
     name: textOf(header.title),
