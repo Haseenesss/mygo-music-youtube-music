@@ -948,8 +948,11 @@ function stopWaiting() {
 
 async function serve(source, bitRate) {
   const ffmpeg = await program("ffmpeg", "-version");
+  // Not "setup": that takes the listener to the plugin's settings, to fill in
+  // what it asks for, and there's nothing there that installs ffmpeg (#3).
+  // An error the app doesn't know it shows in the plugin's own words.
   if (!ffmpeg) {
-    throw fail("setup", t("YouTube Music plays through ffmpeg: install it with Homebrew, or so that it's on the PATH"));
+    throw fail("noFfmpeg", t("YouTube Music plays through ffmpeg: install it with Homebrew, or so that it's on the PATH"));
   }
   const pieces = await asksInPieces(ffmpeg);
   stopWaiting();
@@ -1000,7 +1003,7 @@ export async function stream({ id, quality }) {
     // An address may stop working before it said it would, and YouTube now and
     // then turns down one it just gave out: yt-dlp may find one that works.
     located.delete(id);
-    if (!source.direct || e.code === "setup") throw e;
+    if (!source.direct || e.code === "setup" || e.code === "noFfmpeg") throw e;
     console.warn(`playing ${id} as YouTube gave it: ${e.message}`);
     source = { ...(await throughYtdlp(id, e)), gain: source.gain, at: Date.now() };
     url = await serve(source, kbps);
