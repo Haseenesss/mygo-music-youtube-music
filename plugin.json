@@ -17,9 +17,20 @@
       "/opt/homebrew/bin/ffmpeg",
       "/opt/homebrew/bin/yt-dlp",
       "/usr/local/bin/ffmpeg",
-      "/usr/local/bin/yt-dlp"
+      "/usr/local/bin/yt-dlp",
+      "/usr/bin/defaults",
+      "/usr/bin/pbcopy",
+      "/usr/bin/open",
+      "xdg-settings"
     ]
   },
+  "settings": [
+    {
+      "key": "browser",
+      "label": "Browser to sign in with",
+      "help": "Leave empty for your default browser. Or chrome, safari, firefox, edge, brave, chromium, opera, vivaldi or whale, with a profile as in chrome:Profile 1, or app to sign in in a window of the app"
+    }
+  ],
   "navigation": [
     {
       "builtin": "home"

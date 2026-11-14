@@ -4,7 +4,7 @@
 // the MP3 the app can play, as neither AAC nor Opus is something it decodes.
 // Should YouTube stop answering that app, yt-dlp finds the audio instead, if
 // it's installed. Your library takes your own session, which signing in on
-// Google's page in a window of the app gives, as its cookies.
+// Google's page in your browser gives, as its cookies, read by yt-dlp.
 
 const site = "https://music.youtube.com";
 const webUA =
@@ -22,8 +22,8 @@ function fail(code, message) {
 // The session's cookies, as a Cookie header, kept in the plugin's storage.
 const cookie = () => host.storage.get("cookie") || "";
 
-function cookieValue(name) {
-  for (const part of cookie().split(";")) {
+function cookieValue(name, session = cookie()) {
+  for (const part of session.split(";")) {
     const at = part.indexOf("=");
     if (part.slice(0, at).trim() === name) return part.slice(at + 1).trim();
   }
@@ -64,12 +64,12 @@ function sha1(text) {
 }
 
 // What the website sends to say whose session this is, to the site at origin.
-function authHeaders(origin = site) {
-  const sapisid = cookieValue("__Secure-3PAPISID") || cookieValue("SAPISID");
+function authHeaders(origin = site, session = cookie()) {
+  const sapisid = cookieValue("__Secure-3PAPISID", session) || cookieValue("SAPISID", session);
   if (!sapisid) return {};
   const now = Math.floor(Date.now() / 1000);
   return {
-    cookie: cookie(),
+    cookie: session,
     authorization: `SAPISIDHASH ${now}_${sha1(`${now} ${sapisid} ${origin}`)}`,
     "x-goog-authuser": "0",
   };
@@ -121,8 +121,11 @@ const visionOS = (visitor) => ({
 });
 
 // call asks the service as the website, or as another of its apps. An
-// anonymous call leaves the session out.
-async function call(endpoint, body, as = remix) {
+// anonymous call leaves the session out; one with a session of its own tries
+// that one, and leaves the one kept alone.
+async function call(endpoint, body, as = remix, again = false) {
+  const session = as.session;
+  const gen = sessionGen;
   const res = await fetch(`${site}/youtubei/v1/${endpoint}?prettyPrint=false`, {
     method: "POST",
     headers: {
@@ -130,12 +133,20 @@ async function call(endpoint, body, as = remix) {
       "user-agent": webUA,
       origin: site,
       "x-origin": site,
-      ...(as.anonymous ? {} : authHeaders()),
+      ...(as.anonymous ? {} : authHeaders(site, session ?? cookie())),
       ...as.headers,
     },
     body: JSON.stringify({ context: { client: as.client }, ...body }),
   });
   if (res.status === 401) {
+    // Signed out, or in anew, while this was out: it was of a session that's
+    // gone, and isn't asked again of another, which may be someone else's.
+    if (session !== undefined || gen !== sessionGen) throw fail("signIn");
+    const renewed = !as.anonymous && !again && (await refreshSession());
+    // Another sign-in may have ended while it was renewed: what's kept is
+    // someone else's, maybe, so this isn't asked again.
+    if (gen !== sessionGen) throw fail("signIn");
+    if (renewed) return call(endpoint, body, as, true);
     endSession();
     throw fail("signIn", t("Your YouTube Music session has ended: sign in again"));
   }
@@ -359,18 +370,53 @@ function rowsOf(answer) {
 
 export async function account() {
   if (!cookie()) return null;
-  const r = await call("account/account_menu", {});
+  return accountIn(await call("account/account_menu", {}));
+}
+
+// Who a session is, before it's kept: null when YouTube Music doesn't take it.
+// What else goes wrong, as the network does or a rate limit, is thrown, to try
+// again.
+async function accountOf(session) {
+  try {
+    return accountIn(await call("account/account_menu", {}, { __proto__: remix, session }));
+  } catch (e) {
+    if (e.code === "signIn" || /: 403$/.test(e.message)) return null;
+    throw e;
+  }
+}
+
+function accountIn(r) {
   const header = findOne(r, "activeAccountHeaderRenderer");
   if (!header) return null;
   const name = textOf(header.accountName);
-  return { id: textOf(header.channelHandle) || name, name, imageUrl: imageOf(header.accountPhoto) };
+  const handle = textOf(header.channelHandle);
+  return { id: handle || name, name, imageUrl: imageOf(header.accountPhoto), handle };
 }
 
-// Signing in is on Google's own page, as YouTube Music's website signs in, in a
-// window the app shows. It's done once Google gives YouTube the session.
+// Keeps a session YouTube Music took for me, read from the browser spec when
+// it was one.
+// Its channel's handle is kept too, as the one way to know it's the same
+// account when the session is read again: names aren't unique.
+function keepSession(session, me, spec) {
+  sessionGen++;
+  host.storage.set("cookie", session);
+  if (me.handle) host.storage.set("accountId", me.handle);
+  else host.storage.remove("accountId");
+  if (spec) host.storage.set("cookieFrom", spec);
+  else host.storage.remove("cookieFrom");
+  likedSet = null;
+}
+
+// Signing in is on Google's own page, as YouTube Music's website signs in. By
+// default it's in the listener's own browser, where they may well be signed in
+// already, and the session is read from that browser's cookies by yt-dlp. The
+// "browser" setting names another browser, or "app" for a window of the app.
 const signInPage =
   "https://accounts.google.com/ServiceLogin?ltmpl=music&service=youtube&uilel=3&passive=true" +
   "&continue=https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26app%3Ddesktop%26next%3Dhttps%253A%252F%252Fmusic.youtube.com%252F";
+
+// What the sign-in dialog shows to open by hand, in whichever browser.
+const signInShort = "https://music.youtube.com";
 
 // Google turns down signing in on a page it takes for one inside an app, so it's
 // told the page is the system's own browser.
@@ -379,30 +425,463 @@ const browserUA =
     ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
     : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0";
 
-export async function signIn() {
+// The browsers yt-dlp reads cookies from, by its names for them.
+const browserNames = {
+  brave: "Brave",
+  chrome: "Chrome",
+  chromium: "Chromium",
+  edge: "Edge",
+  firefox: "Firefox",
+  opera: "Opera",
+  safari: "Safari",
+  vivaldi: "Vivaldi",
+  whale: "Whale",
+};
+
+// The default browser, by its macOS bundle ID or Linux desktop file.
+const browserIds = [
+  [/^com\.google\.chrome$|^google-chrome/, "chrome"],
+  [/^com\.apple\.safari$/, "safari"],
+  [/^org\.mozilla\.firefox|^firefox/, "firefox"],
+  [/^com\.microsoft\.edgemac$|^microsoft-edge/, "edge"],
+  [/^com\.brave\.browser$|^brave-browser/, "brave"],
+  [/^org\.chromium\.chromium$|^chromium/, "chromium"],
+  [/^com\.operasoftware\.opera$|^opera/, "opera"],
+  [/^com\.vivaldi\.vivaldi$|^vivaldi/, "vivaldi"],
+  [/^com\.naver\.whale$|^naver-whale/, "whale"],
+];
+
+// Answers what a program writes, and what it said otherwise, given input and
+// giving up on it after timeout.
+async function run(path, args, { input = "", timeout = 15000 } = {}) {
+  const proc = host.spawn(path, args);
+  if (input) proc.write(input);
+  proc.closeStdin();
+  const timer = setTimeout(() => proc.kill(), timeout);
+  const lines = [];
+  for (let line; (line = await proc.readLine()) !== null; ) lines.push(line);
+  const code = await proc.wait();
+  clearTimeout(timer);
+  return { code, lines, errors: proc.errorOutput() };
+}
+
+// The listener's default browser, as yt-dlp names it, or "" when it isn't one
+// yt-dlp reads.
+async function defaultBrowser() {
+  let id = "";
+  try {
+    if (host.platform === "darwin") {
+      const { code, lines } = await run("/usr/bin/defaults", [
+        "read", "com.apple.LaunchServices/com.apple.launchservices.secure", "LSHandlers",
+      ]);
+      // Never chosen, it's Safari.
+      if (code !== 0) return "safari";
+      id = httpsHandler(lines.join("\n")) || "com.apple.safari";
+    } else if (host.platform === "linux") {
+      const { lines } = await run("xdg-settings", ["get", "default-web-browser"]);
+      id = (lines[0] || "").trim();
+    }
+  } catch (e) {
+    if (/allowed/.test(e.message)) throw fail("setup", t("Allow YouTube Music to start programs in its settings"));
+    return "";
+  }
+  id = id.toLowerCase();
+  return browserIds.find(([re]) => re.test(id))?.[1] || "";
+}
+
+// The app that opens https links, in what `defaults read` lists of LaunchServices.
+function httpsHandler(plist) {
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < plist.length; i++) {
+    const c = plist[i];
+    if (c === "{" && ++depth === 1) start = i;
+    if (c === "}" && --depth === 0 && start >= 0) {
+      const entry = plist.slice(start, i);
+      if (/LSHandlerURLScheme = "?https"?;/.test(entry)) {
+        for (const m of entry.matchAll(/LSHandlerRoleAll = "?([^";]+)"?;/g)) {
+          if (m[1] !== "-") return m[1];
+        }
+      }
+      start = -1;
+    }
+  }
+  return "";
+}
+
+// Which browser to sign in with, as yt-dlp takes it, such as "chrome" or
+// "chrome:Profile 1", or "app" for a window of the app. On Windows, the default
+// browser isn't looked up, and newer Chromes there keep their cookies from
+// yt-dlp anyway, so it's the app's window unless a browser is named.
+async function signInBrowser() {
+  const asked = (host.setting("browser") || "").trim();
+  if (asked.toLowerCase() === "app" || (!asked && host.platform === "windows")) return "app";
+  if (asked) {
+    const name = asked.split(/[:+]/)[0].toLowerCase();
+    if (!browserNames[name]) {
+      throw fail("setup", t("Unknown browser in the settings: use chrome, safari, firefox, edge, brave, chromium, opera, vivaldi, whale or app"));
+    }
+    return name + asked.slice(name.length);
+  }
+  return (await defaultBrowser()) || "";
+}
+
+const browserName = (spec) => browserNames[spec.split(/[:+]/)[0]] || spec;
+
+// The browsers' apps on macOS, to open the sign-in page in the one whose
+// cookies are read, should it not be the default browser.
+const browserApps = {
+  brave: "Brave Browser",
+  chrome: "Google Chrome",
+  chromium: "Chromium",
+  edge: "Microsoft Edge",
+  firefox: "Firefox",
+  opera: "Opera",
+  safari: "Safari",
+  vivaldi: "Vivaldi",
+  whale: "Whale",
+};
+
+// Opens the sign-in page in the browser it's read from, where there's a way to,
+// or else wherever links open, when that's the browser: the default one, not
+// named in the settings. Answers whether it opened there.
+async function openSignInPage(spec) {
+  const app = host.platform === "darwin" && spec && browserApps[spec.split(/[:+]/)[0]];
+  if (app) {
+    // A Chrome-like browser's profile, as yt-dlp takes it: its folder's name, or
+    // its path. Others open where they are.
+    const profile = (spec.match(/^[^:]*:([^:]+)/)?.[1] || "").split("/").filter(Boolean).pop() || "";
+    const args = profile && !/^(firefox|safari)/.test(spec)
+      ? ["-n", "-a", app, "--args", `--profile-directory=${profile}`, signInPage]
+      : ["-a", app, signInPage];
+    try {
+      if ((await run("/usr/bin/open", args)).code === 0) return true;
+    } catch (e) {}
+  }
+  if (spec && (host.setting("browser") || "").trim()) return false;
+  try {
+    host.openURL(signInPage);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// yt-dlp is handed what a site's own page would be, with no network, and prints
+// the cookies of the browser that a request to its address would send: the ones
+// that apply to music.youtube.com and are still good, and nothing else.
+const cookiesPage = JSON.stringify({
+  id: "session",
+  title: "session",
+  extractor: "generic",
+  extractor_key: "Generic",
+  webpage_url: `${site}/`,
+  url: `${site}/`,
+  ext: "mp4",
+  formats: [{ format_id: "0", url: `${site}/`, ext: "mp4" }],
+});
+
+// A Cookie header from what yt-dlp prints of a page's cookies, as in
+// `A="x y"; Domain=.youtube.com; Path=/; Secure; Expires=…; B=z; …`, with values
+// quoted as Python's http.cookies does. The first of a name, the most
+// particular, is the one kept. "" is no session.
+function sessionOf(printed) {
+  const attributes = new Set(["domain", "path", "secure", "expires", "version", "httponly", "max-age", "samesite", "comment"]);
+  const seen = new Set();
+  const parts = [];
+  for (const token of printed.trim().split("; ")) {
+    const at = token.indexOf("=");
+    const name = at < 0 ? token : token.slice(0, at);
+    if (at < 0 || attributes.has(name.toLowerCase()) || seen.has(name)) continue;
+    seen.add(name);
+    parts.push(`${name}=${unquote(token.slice(at + 1))}`);
+  }
+  const session = parts.join("; ");
+  return /(^|; )SAPISID=/.test(session) && /(^|; )__Secure-3PSID=/.test(session) ? session : "";
+}
+
+function unquote(value) {
+  if (value.length < 2 || value[0] !== '"' || value[value.length - 1] !== '"') return value;
+  return value
+    .slice(1, -1)
+    .replace(/\\([0-3][0-7][0-7])|\\(.)/g, (_, octal, c) => (octal ? String.fromCharCode(parseInt(octal, 8)) : c));
+}
+
+// Reads YouTube's session from a browser's cookies, with yt-dlp. Answers ""
+// while the browser isn't signed in.
+async function browserSession(spec) {
+  const ytdlp = await program("yt-dlp", "--version");
+  if (!ytdlp) throw fail("setup", t("Signing in from your browser needs yt-dlp: install it with Homebrew"));
+  // The browser may ask for the keychain first, which waits for the listener.
+  const { lines, errors } = await run(
+    ytdlp,
+    [
+      "--ignore-config", "--quiet", "--skip-download",
+      "--cookies-from-browser", spec,
+      "--load-info-json", "-",
+      "--print", "%(cookies)s",
+    ],
+    { input: cookiesPage, timeout: 120000 },
+  );
+  const session = sessionOf(lines.join(" "));
+  if (session) return session;
+  const why = errors.split("\n").find((l) => /^ERROR:/.test(l)) || "";
+  if (/Operation not permitted|Permission denied/i.test(errors)) {
+    throw new Error(t("Allow MyGo Music Full Disk Access in System Settings > Privacy & Security to read Safari's cookies"));
+  }
+  if (/keychain|keyring|cannot decrypt|failed to decrypt/i.test(errors)) {
+    throw new Error(t("Couldn't read the browser's cookies: allow access to its key in the keychain prompt, and try again"));
+  }
+  if (/could not find .*(cookies database|profile)|unsupported browser|failed to load cookies/i.test(why)) {
+    // macOS hides other apps' folders from an app it hasn't given Full Disk
+    // Access, and yt-dlp then finds no database where there is one.
+    const hint = host.platform === "darwin" && /could not find .*cookies database/i.test(why)
+      ? t("Couldn't find that browser's cookies: allow MyGo Music Full Disk Access in System Settings > Privacy & Security, or paste the cookie below")
+      : t("Couldn't find that browser's cookies: name another in the settings");
+    throw fail("setup", `${hint} (${why.replace(/^ERROR:\s*/, "")})`);
+  }
+  return "";
+}
+
+// Copies text to the clipboard where there's a way to.
+async function copy(text) {
+  if (host.platform !== "darwin") return false;
+  try {
+    const proc = host.spawn("/usr/bin/pbcopy", []);
+    proc.write(text);
+    proc.closeStdin();
+    return (await proc.wait()) === 0;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Counts sign-ins, so that one started anew stops the one before waiting.
+let signingIn = 0;
+// The app gives up on a sign-in after five minutes; this one ends before, and
+// keeps nothing the app wouldn't take anymore.
+const signInFor = 4.5 * 60 * 1000;
+
+// attempt, from the app, says which sign-in host.signInInput is of.
+export async function signIn({ attempt } = {}) {
+  const gen = ++signingIn;
+  const spec = await signInBrowser();
+  if (gen !== signingIn) throw new Error(t("Another sign-in started"));
+  if (spec === "app") return signInInApp(gen);
+  // An app without host.signInInput shows text alone in its dialog: no link
+  // to copy, and nothing to paste in.
+  if (typeof host.signInInput !== "function") return signInWithText(spec, gen);
+
+  const deadline = Date.now() + signInFor;
+  const wanted = () => gen === signingIn && Date.now() < deadline;
+  const name = spec ? browserName(spec) : "";
+  let tried = "";
+  let reading = !!spec;
+  let why = spec ? "" : t("Your default browser isn't one yt-dlp reads: name a browser in the settings, or app");
+
+  // Signed in there already, it's done without opening a page.
+  if (reading) {
+    host.signInPrompt({ text: t("Reading your YouTube session from %s…").replace("%s", name) });
+    try {
+      const me = await trySession(spec, () => tried, (s) => (tried = s), wanted);
+      if (me) return me;
+    } catch (e) {
+      reading = false;
+      why = e.message;
+    }
+  }
+  if (gen !== signingIn) throw new Error(t("Another sign-in started"));
+
+  const opened = await openSignInPage(spec);
+  if (gen !== signingIn) throw new Error(t("Another sign-in started"));
+  const prompt = (problem) =>
+    host.signInPrompt({
+      text: [
+        problem,
+        reading
+          ? (opened
+              ? t("Sign in to YouTube Music on the page that opened in %s: this goes on by itself once you have.")
+              : t("Open the link below in %s and sign in to YouTube Music: this goes on by itself once you have.")
+            ).replace("%s", name)
+          : t("Sign in to YouTube Music in your browser, on the page that opened or at the link below."),
+        t("Or copy the Cookie of a request to music.youtube.com from the browser's developer tools (Network), and paste it here."),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      url: signInPage,
+      input: t("Cookie of music.youtube.com"),
+      submit: t("Sign In"),
+    });
+  prompt(why);
+
+  let answer = host.signInInput(attempt);
+  while (Date.now() < deadline) {
+    const pasted = await Promise.race([answer.then((text) => ({ text })), sleep(3000).then(() => null)]);
+    if (gen !== signingIn) throw new Error(t("Another sign-in started"));
+    if (pasted) {
+      answer = host.signInInput(attempt);
+      const me = await tryPasted(pasted.text, wanted);
+      if (typeof me === "string") {
+        prompt(me);
+        continue;
+      }
+      return me;
+    }
+    if (!reading) continue;
+    try {
+      const me = await trySession(spec, () => tried, (s) => (tried = s), wanted);
+      if (me) return me;
+    } catch (e) {
+      if (gen !== signingIn) throw e;
+      reading = false;
+      prompt(e.message);
+    }
+  }
+  throw new Error(t("Didn't see you sign in to YouTube Music in time: try again"));
+}
+
+// A session from what the listener pasted: a Cookie header, with or without
+// its name, or a request copied as cURL. Answers who it is, or else what's
+// wrong with it.
+async function tryPasted(text, wanted) {
+  let header = text.trim();
+  const curl =
+    header.match(/(?:-H|--header)\s+(['"])cookie:\s*([\s\S]*?)\1/i) || header.match(/(?:-b|--cookie)\s+(['"])([\s\S]*?)\1/);
+  if (curl) header = curl[2];
+  header = header.replace(/^cookie:\s*/i, "");
+  const session = header
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.indexOf("=") > 0)
+    .join("; ");
+  if (!/(^|; )SAPISID=/.test(session) || !/(^|; )__Secure-3PSID=/.test(session)) {
+    return t("That isn't YouTube's session: it needs the SAPISID and __Secure-3PSID cookies");
+  }
+  let me;
+  try {
+    me = await accountOf(session);
+  } catch (e) {
+    return `${t("Couldn't reach YouTube Music: try again")} (${e.message})`;
+  }
+  if (!me) return t("YouTube Music didn't take that sign-in: try again");
+  if (!wanted()) throw new Error(t("Another sign-in started"));
+  keepSession(session, me, "");
+  return me;
+}
+
+// Signing in from the browser with a dialog that shows text alone.
+async function signInWithText(spec, gen) {
+  if (!spec) {
+    throw fail("setup", t("Your default browser isn't one yt-dlp reads: name a browser in the settings, or app"));
+  }
+  const deadline = Date.now() + signInFor;
+  const wanted = () => gen === signingIn && Date.now() < deadline;
+  const name = browserName(spec);
+
+  host.signInPrompt({ text: t("Reading your YouTube session from %s…").replace("%s", name) });
+  let tried = "";
+  const me = await trySession(spec, () => tried, (s) => (tried = s), wanted);
+  if (me) return me;
+
+  const opened = await openSignInPage(spec);
+  const copied = await copy(signInPage);
+  host.signInPrompt({
+    text: [
+      opened
+        ? t("Sign in to YouTube Music on the page that opened in %s.").replace("%s", name)
+        : t("Sign in to YouTube Music in %s.").replace("%s", name),
+      (copied ? t("The sign-in link is copied, or open:") : t("Or open:")) + ` ${signInShort}`,
+      t("This finishes on its own once you're signed in there. Signed in in another browser? Name it in the settings."),
+    ].join("\n"),
+  });
+
+  while (Date.now() < deadline) {
+    await sleep(3000);
+    if (gen !== signingIn) throw new Error(t("Another sign-in started"));
+    const me = await trySession(spec, () => tried, (s) => (tried = s), wanted);
+    if (me) return me;
+  }
+  throw new Error(t("Didn't see you sign in to YouTube Music in time: try again"));
+}
+
+// Takes the browser's session, if it has one not turned down before and YouTube
+// Music takes it, and answers who it is. One that couldn't be checked, as when
+// the network is down, is tried again.
+async function trySession(spec, last, setLast, wanted) {
+  const session = await browserSession(spec);
+  if (!session || session === last()) return null;
+  const me = await accountOf(session).catch(() => undefined);
+  if (me === undefined) return null;
+  if (!me) {
+    setLast(session);
+    return null;
+  }
+  if (!wanted()) throw new Error(t("Another sign-in started"));
+  keepSession(session, me, spec);
+  return me;
+}
+
+// Signing in in a window of the app, as it was before, for Windows, where
+// yt-dlp can't hand over a browser's cookies, or when the listener asks.
+async function signInInApp(gen) {
   const { cookie: session } = await host.webSignIn({
     url: signInPage,
     cookiesOf: site,
     until: ["SAPISID", "__Secure-3PSID"],
     userAgent: browserUA,
   });
-  host.storage.set("cookie", session);
-  likedSet = null;
-  const me = await account();
-  if (!me) {
-    endSession();
-    throw new Error(t("YouTube Music didn't take that sign-in: try again"));
-  }
+  if (gen !== signingIn) throw new Error(t("Another sign-in started"));
+  const me = await accountOf(session);
+  if (!me) throw new Error(t("YouTube Music didn't take that sign-in: try again"));
+  if (gen !== signingIn) throw new Error(t("Another sign-in started"));
+  keepSession(session, me, "");
   return me;
 }
 
+// A session read from a browser goes on there, and Google renews its cookies
+// as it's used, so the one kept here can end before the browser's does: it's
+// read from there again, once, before giving up on it.
+// It's taken only for the same account, as another may have signed in there
+// since, and not once this session ended, as on signing out meanwhile.
+let refreshing = null;
+let refreshingGen = -1;
+let sessionGen = 0;
+async function refreshSession() {
+  const spec = host.storage.get("cookieFrom");
+  const handle = host.storage.get("accountId");
+  if (!spec || !handle) return false;
+  const gen = sessionGen;
+  if (refreshingGen !== gen) refreshing = null;
+  refreshingGen = gen;
+  refreshing ||= (async () => {
+    const session = await browserSession(spec);
+    if (!session || session === cookie()) return false;
+    const me = await accountOf(session);
+    if (!me || me.handle !== handle || gen !== sessionGen) return false;
+    host.storage.set("cookie", session);
+    likedSet = null;
+    return true;
+  })()
+    .catch(() => false)
+    .finally(() =>
+      setTimeout(() => {
+        if (refreshingGen === gen) refreshing = null;
+      }, 60000),
+    );
+  return refreshing;
+}
+
 export function signOut() {
+  signingIn++;
   endSession();
 }
 
 // What's kept of a session goes with it.
 function endSession() {
+  sessionGen++;
   host.storage.remove("cookie");
+  host.storage.remove("cookieFrom");
+  host.storage.remove("accountId");
   likedSet = null;
 }
 
